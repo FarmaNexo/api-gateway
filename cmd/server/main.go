@@ -17,6 +17,9 @@ import (
 	"github.com/farmanexo/api-gateway/internal/presentation/http/routes"
 	"github.com/farmanexo/api-gateway/pkg/config"
 
+	// Swagger docs
+	_ "github.com/farmanexo/api-gateway/docs"
+
 	"go.uber.org/zap"
 )
 
