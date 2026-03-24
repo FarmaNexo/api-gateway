@@ -1,0 +1,44 @@
+# configs/config.local.yaml
+# Configuración para máquina local del desarrollador
+environment: local
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: 30s
+  write_timeout: 60s
+  idle_timeout: 120s
+
+services:
+  auth_service_url: "http://localhost:4001"
+  user_service_url: "http://localhost:4002"
+  catalog_service_url: "http://localhost:4003"
+  pharmacy_service_url: "http://localhost:4004"
+  price_service_url: "http://localhost:4005"
+  order_service_url: "http://localhost:4011"
+  default_timeout: 30s
+
+jwt:
+  secret: "dev-super-secret-key-change-in-production-min-32-chars"
+
+redis:
+  host: localhost
+  port: 6379
+  password: "farmanexo2026"
+  db: 1
+  max_retries: 3
+  pool_size: 10
+
+rate_limit:
+  requests_per_minute: 120
+  burst: 20
+
+circuit_breaker:
+  max_requests: 10
+  interval: 60s
+  timeout: 30s
+  failure_threshold: 10
+
+log:
+  level: debug
+  encoding: console

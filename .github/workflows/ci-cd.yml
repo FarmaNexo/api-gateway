@@ -1,0 +1,195 @@
+# =============================================================================
+# FarmaNexo — api-gateway CI/CD Pipeline
+# =============================================================================
+# Gitflow:
+#   feature/* → build + test only
+#   develop   → build + test + push ECR (develop tag) + deploy ECS Dev
+#   main      → build + test + push ECR (latest + semver) + deploy Prod (TBD)
+# =============================================================================
+
+name: api-gateway CI/CD
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  SERVICE_NAME: api-gateway
+  ECR_REPOSITORY: farmanexo/api-gateway
+  ECS_CLUSTER: farmanexo-dev-cluster
+  ECS_SERVICE: farmanexo-dev-api-gateway
+  AWS_REGION: us-east-1
+
+# Required for OIDC token authentication with AWS
+permissions:
+  id-token: write
+  contents: read
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# =============================================================================
+# JOB 1: Build and Test (always runs)
+# =============================================================================
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install swag CLI
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: Generate Swagger docs
+        run: swag init -g cmd/server/main.go --output docs --parseDependency --parseInternal
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests with race detection and coverage
+        run: go test ./... -v -race -coverprofile=coverage.out
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 2: Push to ECR (only on develop or main)
+  # ===========================================================================
+  push-to-ecr:
+    name: Push to ECR
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      image-tag: ${{ steps.build-image.outputs.image-tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEV_ACCOUNT_ID }}:role/github-actions-ecr-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${SHORT_SHA::7}"
+
+          # Build the Docker image
+          docker build -t ${{ env.SERVICE_NAME }} .
+
+          if [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            # Develop: tag with develop-{short sha} + latest
+            IMAGE_TAG="develop-${SHORT_SHA}"
+            docker tag ${{ env.SERVICE_NAME }} ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}
+            docker tag ${{ env.SERVICE_NAME }} ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest
+            docker push ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}
+            docker push ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest
+            echo "Pushed: ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${IMAGE_TAG} + latest"
+
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            # Main: tag with latest + versioned tag (date-sha)
+            VERSION_TAG="v$(date +%Y%m%d)-${SHORT_SHA}"
+            docker tag ${{ env.SERVICE_NAME }} ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest
+            docker tag ${{ env.SERVICE_NAME }} ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${VERSION_TAG}
+            docker push ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest
+            docker push ${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${VERSION_TAG}
+            echo "Pushed: latest + ${VERSION_TAG}"
+            IMAGE_TAG="${VERSION_TAG}"
+          fi
+
+          echo "image-tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # JOB 3: Deploy to Dev (only on develop)
+  # ===========================================================================
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    needs: push-to-ecr
+    if: github.ref == 'refs/heads/develop'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEV_ACCOUNT_ID }}:role/github-actions-ecr-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new ECS deployment
+        run: |
+          echo "Deploying ${{ env.SERVICE_NAME }} to Dev cluster..."
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for deployment to stabilize
+        run: |
+          echo "Waiting for ${{ env.ECS_SERVICE }} to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --region ${{ env.AWS_REGION }}
+          echo "Deployment complete."
+
+  # ===========================================================================
+  # JOB 4: Deploy to Prod (only on main — placeholder)
+  # ===========================================================================
+  deploy-prod:
+    name: Deploy to Prod
+    runs-on: ubuntu-latest
+    needs: push-to-ecr
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to Prod (placeholder)
+        run: |
+          echo "Deploy to prod — coming soon"
+          echo "Image tag: ${{ needs.push-to-ecr.outputs.image-tag }}"
+          echo "Prod deployment will be enabled when farmanexo-prod environment is ready."
+
+# =============================================================================
+# SECRETS REQUERIDOS EN GITHUB (Settings → Secrets → Actions):
+# AWS_DEV_ACCOUNT_ID  → ID de cuenta AWS Dev (no compartir)
+# AWS_PROD_ACCOUNT_ID → ID de cuenta AWS Prod (no compartir)
+# =============================================================================

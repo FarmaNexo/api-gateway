@@ -1,0 +1,45 @@
+# configs/config.development.yaml
+# Configuración para el ambiente DEVELOPMENT desplegado
+# Los valores sensibles vienen de variables de entorno
+environment: development
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: 30s
+  write_timeout: 60s
+  idle_timeout: 120s
+
+services:
+  auth_service_url: "${AUTH_SERVICE_URL}"
+  user_service_url: "${USER_SERVICE_URL}"
+  catalog_service_url: "${CATALOG_SERVICE_URL}"
+  pharmacy_service_url: "${PHARMACY_SERVICE_URL}"
+  price_service_url: "${PRICE_SERVICE_URL}"
+  order_service_url: "${ORDER_SERVICE_URL}"
+  default_timeout: 30s
+
+jwt:
+  secret: "${JWT_SECRET}"
+
+redis:
+  host: "${REDIS_HOST}"
+  port: 6379
+  password: "${REDIS_PASSWORD}"
+  db: 0
+  max_retries: 3
+  pool_size: 10
+
+rate_limit:
+  requests_per_minute: 60
+  burst: 10
+
+circuit_breaker:
+  max_requests: 5
+  interval: 60s
+  timeout: 30s
+  failure_threshold: 5
+
+log:
+  level: debug
+  encoding: console
