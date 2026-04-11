@@ -71,6 +71,34 @@ func SetupRoutes(
 	r.Get("/", gatewayController.HealthCheck)
 
 	// ========================================
+	// PASSTHROUGH ROUTES (health checks, sin rewrite)
+	// ========================================
+
+	r.Route("/auth", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("auth-service", proxies.Auth))
+	})
+
+	r.Route("/users", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("user-service", proxies.User))
+	})
+
+	r.Route("/products", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("catalog-service", proxies.Catalog))
+	})
+
+	r.Route("/pharmacies", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("pharmacy-service", proxies.Pharmacy))
+	})
+
+	r.Route("/prices", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("price-service", proxies.Price))
+	})
+
+	r.Route("/orders", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("order-service", proxies.Order))
+	})
+
+	// ========================================
 	// API ROUTES — Reverse Proxy
 	// ========================================
 
