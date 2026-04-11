@@ -41,6 +41,12 @@ func NewRateLimitMiddleware(
 // RateLimit middleware que limita requests por IP
 func (rl *RateLimitMiddleware) RateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip rate limiting for health check (ECS container health check)
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Obtener identificador: user_id si autenticado, IP si no
 		identifier := rl.getIdentifier(r)
 		key := fmt.Sprintf("ratelimit:gw:%s", identifier)
