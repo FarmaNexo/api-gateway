@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-xray-sdk-go/xray"
 	"go.uber.org/zap"
 )
 
@@ -36,7 +37,7 @@ func NewServiceProxy(name, targetURL string, timeout time.Duration, logger *zap.
 		return nil, fmt.Errorf("invalid URL for service %s: %w", name, err)
 	}
 
-	transport := &http.Transport{
+	baseTransport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   5 * time.Second,
 			KeepAlive: 30 * time.Second,
@@ -46,6 +47,10 @@ func NewServiceProxy(name, targetURL string, timeout time.Duration, logger *zap.
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 5 * time.Second,
 	}
+
+	// Envuelve el transport con X-Ray para que cada call downstream aparezca
+	// como subsegment del trace padre. Sin segment padre: passthrough sin error.
+	transport := xray.RoundTripper(baseTransport)
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport

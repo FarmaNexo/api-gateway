@@ -4,6 +4,7 @@ package routes
 import (
 	"net/http"
 
+	"github.com/aws/aws-xray-sdk-go/xray"
 	"github.com/farmanexo/api-gateway/internal/infrastructure/proxy"
 	"github.com/farmanexo/api-gateway/internal/presentation/http/controllers"
 	"github.com/farmanexo/api-gateway/internal/presentation/http/middlewares"
@@ -41,6 +42,13 @@ func SetupRoutes(
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+
+	// X-Ray tracing — crea un segment por request. Tras Recoverer para que
+	// un panic del handler no rompa el trace. No-op si no hay daemon.
+	r.Use(func(next http.Handler) http.Handler {
+		return xray.Handler(xray.NewFixedSegmentNamer("api-gateway"), next)
+	})
+
 	r.Use(middlewares.CorrelationID)
 	r.Use(middlewares.RequestLogger(logger))
 	r.Use(middlewares.SecurityHeaders)

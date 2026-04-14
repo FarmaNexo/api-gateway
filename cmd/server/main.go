@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-xray-sdk-go/xray"
 	"github.com/farmanexo/api-gateway/internal/infrastructure/cache"
 	"github.com/farmanexo/api-gateway/internal/infrastructure/proxy"
 	"github.com/farmanexo/api-gateway/internal/presentation/http/controllers"
@@ -52,6 +53,12 @@ func main() {
 
 	logger := initLogger(cfg)
 	defer logger.Sync()
+
+	// X-Ray — no-op si AWS_XRAY_DAEMON_ADDRESS no esta seteado (local dev).
+	// En ECS con enable_xray=true el sidecar xray-daemon escucha en 127.0.0.1:2000.
+	xray.Configure(xray.Config{
+		ServiceVersion: "1.0.0",
+	})
 
 	logger.Info("Iniciando API Gateway",
 		zap.String("environment", cfg.Environment),
