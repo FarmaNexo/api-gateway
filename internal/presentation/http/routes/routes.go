@@ -86,6 +86,10 @@ func SetupRoutes(
 		r.Handle("/*", cbManager.Wrap("auth-service", proxies.Auth))
 	})
 
+	r.Route("/legal", func(r chi.Router) {
+		r.Handle("/*", cbManager.Wrap("auth-service", proxies.Auth))
+	})
+
 	r.Route("/users", func(r chi.Router) {
 		r.Handle("/*", cbManager.Wrap("user-service", proxies.User))
 	})
@@ -115,6 +119,14 @@ func SetupRoutes(
 		r.Route("/auth", func(r chi.Router) {
 			r.Handle("/*", cbManager.Wrap("auth-service",
 				http.StripPrefix("/api/v1/auth", withPrefix("/api/v1/auth", proxies.Auth)),
+			))
+		})
+
+		// --- Legal documents (públicas — Términos, Privacidad, etc.) ---
+		// Servidos por auth-service. Sin JWT: la página /terminos debe ser accesible sin login.
+		r.Route("/legal", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("auth-service",
+				http.StripPrefix("/api/v1/legal", withPrefix("/api/v1/legal", proxies.Auth)),
 			))
 		})
 
@@ -198,6 +210,22 @@ func SetupRoutes(
 		r.Route("/brands", func(r chi.Router) {
 			r.Handle("/*", cbManager.Wrap("catalog-service",
 				http.StripPrefix("/api/v1/public/brands", withPrefix("/api/v1/brands", proxies.Catalog)),
+			))
+		})
+		// Farmacias: lectura pública (lista, detalle, nearby, hours, inventario).
+		// Las mutaciones (registro, actualizar, verify) siguen detrás de /api/v1/pharmacies (JWT).
+		r.Route("/pharmacies", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("pharmacy-service",
+				http.StripPrefix("/api/v1/public/pharmacies", withPrefix("/api/v1/pharmacies", proxies.Pharmacy)),
+			))
+		})
+		// Prices: lectura pública selectiva.
+		// Comparador de precios, alternativas terapéuticas (HU-015) y comparación genérico-vs-marca
+		// son visibles desde el detalle de medicamento (público). Las alertas de precio (escritura)
+		// siguen detrás de /api/v1/prices (JWT).
+		r.Route("/prices", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("price-service",
+				http.StripPrefix("/api/v1/public/prices", withPrefix("/api/v1/prices", proxies.Price)),
 			))
 		})
 	})
