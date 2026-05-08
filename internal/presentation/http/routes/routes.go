@@ -79,14 +79,16 @@ func SetupRoutes(
 	r.Get("/", gatewayController.HealthCheck)
 
 	// ========================================
-	// PASSTHROUGH ROUTES (health checks, sin rewrite)
+	// PASSTHROUGH ROUTES (health checks duales, sin rewrite)
+	//
+	// Cada microservicio expone /{recurso}/health además de /health, para
+	// que el ALB pueda apuntar el target group a una ruta path-based bajo
+	// el prefijo permitido. Solo los 9 prefijos de dominio son válidos
+	// (services/CLAUDE.md §5.5). NO se permiten top-level como /legal,
+	// /admin, /public — son violaciones del contrato del ALB interno.
 	// ========================================
 
 	r.Route("/auth", func(r chi.Router) {
-		r.Handle("/*", cbManager.Wrap("auth-service", proxies.Auth))
-	})
-
-	r.Route("/legal", func(r chi.Router) {
 		r.Handle("/*", cbManager.Wrap("auth-service", proxies.Auth))
 	})
 
@@ -114,119 +116,87 @@ func SetupRoutes(
 	// API ROUTES — Reverse Proxy
 	// ========================================
 
+	// ========================================
+	// API v1 — Reverse Proxy
+	//
+	// Modelo de auth: cada microservicio downstream tiene su propio
+	// authMiddleware (validación JWT + admin/owner role). El gateway NO
+	// es la única autoridad de auth; defensa en profundidad delegada.
+	//
+	// - /auth/*: rutas públicas (register/login/refresh/legal) y protegidas
+	//   (logout/me/*) coexisten; auth-service decide internamente. El gateway
+	//   no impone JWT aquí porque rompería login y la página /terminos.
+	//
+	// - /products, /categories, /brands, /pharmacies, /prices: cada servicio
+	//   marca cada endpoint individualmente. Lecturas públicas (GET catálogo,
+	//   GET farmacias, comparador de precios) no requieren JWT. Mutaciones
+	//   y endpoints user-context (alertas de precio, registro de farmacia,
+	//   admin) son protegidos por el authMiddleware del propio servicio.
+	//   No hay /api/v1/public/* — el modo de acceso vive en middleware,
+	//   no en path (services/CLAUDE.md §5.5).
+	//
+	// - /users, /cart, /orders: TODAS sus rutas requieren user-context.
+	//   El gateway impone JWT acá como gate adicional (valida el token y
+	//   inyecta user_id en el contexto antes del proxy).
+	// ========================================
 	r.Route("/api/v1", func(r chi.Router) {
-		// --- Auth routes (públicas — NO requieren JWT en el gateway) ---
+		// --- Auth (incluye /auth/legal/*) — auth-service decide internamente ---
 		r.Route("/auth", func(r chi.Router) {
 			r.Handle("/*", cbManager.Wrap("auth-service",
 				http.StripPrefix("/api/v1/auth", withPrefix("/api/v1/auth", proxies.Auth)),
 			))
 		})
 
-		// --- Legal documents (públicas — Términos, Privacidad, etc.) ---
-		// Servidos por auth-service. Sin JWT: la página /terminos debe ser accesible sin login.
-		r.Route("/legal", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("auth-service",
-				http.StripPrefix("/api/v1/legal", withPrefix("/api/v1/legal", proxies.Auth)),
+		// --- Catálogo y disponibilidad: auth descentralizada en cada servicio ---
+		r.Route("/products", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("catalog-service",
+				http.StripPrefix("/api/v1/products", withPrefix("/api/v1/products", proxies.Catalog)),
+			))
+		})
+		r.Route("/categories", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("catalog-service",
+				http.StripPrefix("/api/v1/categories", withPrefix("/api/v1/categories", proxies.Catalog)),
+			))
+		})
+		r.Route("/brands", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("catalog-service",
+				http.StripPrefix("/api/v1/brands", withPrefix("/api/v1/brands", proxies.Catalog)),
+			))
+		})
+		r.Route("/pharmacies", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("pharmacy-service",
+				http.StripPrefix("/api/v1/pharmacies", withPrefix("/api/v1/pharmacies", proxies.Pharmacy)),
+			))
+		})
+		r.Route("/prices", func(r chi.Router) {
+			r.Handle("/*", cbManager.Wrap("price-service",
+				http.StripPrefix("/api/v1/prices", withPrefix("/api/v1/prices", proxies.Price)),
 			))
 		})
 
-		// --- Rutas protegidas (requieren JWT) ---
+		// --- User-context obligatorio (gateway-enforced JWT) ---
+		// Todas las rutas bajo estos prefijos requieren user_id del JWT.
+		// Catalog/pharmacy/price NO van aquí — su lectura es pública.
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireAuth)
 
-			// User service
 			r.Route("/users", func(r chi.Router) {
 				r.Handle("/*", cbManager.Wrap("user-service",
 					http.StripPrefix("/api/v1/users", withPrefix("/api/v1/users", proxies.User)),
 				))
 			})
 
-			// Catalog service — products
-			r.Route("/products", func(r chi.Router) {
-				r.Handle("/*", cbManager.Wrap("catalog-service",
-					http.StripPrefix("/api/v1/products", withPrefix("/api/v1/products", proxies.Catalog)),
-				))
-			})
-
-			// Catalog service — categories
-			r.Route("/categories", func(r chi.Router) {
-				r.Handle("/*", cbManager.Wrap("catalog-service",
-					http.StripPrefix("/api/v1/categories", withPrefix("/api/v1/categories", proxies.Catalog)),
-				))
-			})
-
-			// Catalog service — brands
-			r.Route("/brands", func(r chi.Router) {
-				r.Handle("/*", cbManager.Wrap("catalog-service",
-					http.StripPrefix("/api/v1/brands", withPrefix("/api/v1/brands", proxies.Catalog)),
-				))
-			})
-
-			// Pharmacy service
-			r.Route("/pharmacies", func(r chi.Router) {
-				r.Handle("/*", cbManager.Wrap("pharmacy-service",
-					http.StripPrefix("/api/v1/pharmacies", withPrefix("/api/v1/pharmacies", proxies.Pharmacy)),
-				))
-			})
-
-			// Price service
-			r.Route("/prices", func(r chi.Router) {
-				r.Handle("/*", cbManager.Wrap("price-service",
-					http.StripPrefix("/api/v1/prices", withPrefix("/api/v1/prices", proxies.Price)),
-				))
-			})
-
-			// Order service — cart
 			r.Route("/cart", func(r chi.Router) {
 				r.Handle("/*", cbManager.Wrap("order-service",
 					http.StripPrefix("/api/v1/cart", withPrefix("/api/v1/cart", proxies.Order)),
 				))
 			})
 
-			// Order service — orders
 			r.Route("/orders", func(r chi.Router) {
 				r.Handle("/*", cbManager.Wrap("order-service",
 					http.StripPrefix("/api/v1/orders", withPrefix("/api/v1/orders", proxies.Order)),
 				))
 			})
-		})
-	})
-
-	// ========================================
-	// Catalog public endpoints (sin auth)
-	// Productos, categorías y marcas son públicas para lectura
-	// ========================================
-	r.Route("/api/v1/public", func(r chi.Router) {
-		r.Route("/products", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("catalog-service",
-				http.StripPrefix("/api/v1/public/products", withPrefix("/api/v1/products", proxies.Catalog)),
-			))
-		})
-		r.Route("/categories", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("catalog-service",
-				http.StripPrefix("/api/v1/public/categories", withPrefix("/api/v1/categories", proxies.Catalog)),
-			))
-		})
-		r.Route("/brands", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("catalog-service",
-				http.StripPrefix("/api/v1/public/brands", withPrefix("/api/v1/brands", proxies.Catalog)),
-			))
-		})
-		// Farmacias: lectura pública (lista, detalle, nearby, hours, inventario).
-		// Las mutaciones (registro, actualizar, verify) siguen detrás de /api/v1/pharmacies (JWT).
-		r.Route("/pharmacies", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("pharmacy-service",
-				http.StripPrefix("/api/v1/public/pharmacies", withPrefix("/api/v1/pharmacies", proxies.Pharmacy)),
-			))
-		})
-		// Prices: lectura pública selectiva.
-		// Comparador de precios, alternativas terapéuticas (HU-015) y comparación genérico-vs-marca
-		// son visibles desde el detalle de medicamento (público). Las alertas de precio (escritura)
-		// siguen detrás de /api/v1/prices (JWT).
-		r.Route("/prices", func(r chi.Router) {
-			r.Handle("/*", cbManager.Wrap("price-service",
-				http.StripPrefix("/api/v1/public/prices", withPrefix("/api/v1/prices", proxies.Price)),
-			))
 		})
 	})
 
